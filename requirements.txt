@@ -2,6 +2,5 @@ streamlit
 supabase
 google-generativeai
 audio-recorder-streamlit
-extra-streamlit-components  # Essa é a biblioteca que vai gerenciar a "central de cookies"
+extra-streamlit-components
 pandas
-python-dotenv               # Para ler o arquivo .env no seu computador
