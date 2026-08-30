@@ -39,22 +39,25 @@ if auth_status != "logado":
     st.stop()
 
 # --- FUNÇÕES DE BANCO DE DADOS ---
-# Tratamento de erro robusto e garantia de que as colunas existam mesmo se o mês estiver vazio
 def get_transacoes(mes_ref):
-    colunas_padrao = ['id', 'tipo', 'valor', 'categoria', 'descricao', 'metodo_pagamento', 'data_transacao']
     try:
+        # Tenta buscar os dados
         res = supabase.table('transacoes').select("*").eq('mes_referencia', mes_ref).execute()
         if res.data:
             return pd.DataFrame(res.data)
         else:
-            return pd.DataFrame(columns=colunas_padrao)
+            return pd.DataFrame()
     except Exception as e:
-        st.error(f"Erro de conexão com o banco. Você rodou o comando SQL para desativar o RLS?")
-        return pd.DataFrame(columns=colunas_padrao)
+        # Imprime o erro real do Supabase na tela do app, furando o bloqueio do Streamlit
+        st.error(f"🚨 ERRO REAL DO SUPABASE: {e}")
+        return pd.DataFrame()
 
 def deletar_transacao(id_transacao):
-    supabase.table('transacoes').delete().eq('id', id_transacao).execute()
-    st.rerun()
+    try:
+        supabase.table('transacoes').delete().eq('id', id_transacao).execute()
+        st.rerun()
+    except Exception as e:
+        st.error(f"🚨 ERRO AO DELETAR: {e}")
 
 # --- INTERFACE PRINCIPAL ---
 st.title("📊 Seu Controle Financeiro")
@@ -85,9 +88,8 @@ with tab_lancamento:
         with col2:
             st.audio(audio_bytes, format="audio/wav")
             if st.button("Transcrever e Salvar Direto 🚀", use_container_width=True, type="primary"):
-                with st.spinner("Ouvindo e lançando na planilha..."):
+                with st.spinner("Ouvindo e lançando na base..."):
                     try:
-                        # Prompt forçando o formato final para ir direto pro banco
                         prompt = """
                         Você é um assistente financeiro. Extraia os dados do áudio e retorne APENAS um JSON válido.
                         Formato obrigatório:
@@ -105,7 +107,6 @@ with tab_lancamento:
                         texto_limpo = resposta.text.replace("```json", "").replace("```", "").strip()
                         dados = json.loads(texto_limpo)
                         
-                        # Injeta o mês e salva
                         dados["mes_referencia"] = mes_atual
                         supabase.table('transacoes').insert(dados).execute()
                         
@@ -115,7 +116,6 @@ with tab_lancamento:
 
     st.divider()
     
-    # Formulário Manual como Backup (Escondido para não poluir a tela)
     with st.expander("📝 Inserir Manualmente (Backup)", expanded=False):
         with st.form("form_transacao_manual"):
             c1, c2 = st.columns(2)
@@ -126,11 +126,14 @@ with tab_lancamento:
             descricao_m = st.text_input("Descrição (Ex: Mercadinho do Zé)")
             
             if st.form_submit_button("💾 Salvar Manualmente", use_container_width=True):
-                supabase.table('transacoes').insert({
-                    "tipo": tipo_m, "valor": valor_m, "categoria": categoria_m, 
-                    "descricao": descricao_m, "metodo_pagamento": pagamento_m, "mes_referencia": mes_atual
-                }).execute()
-                st.success("✅ Lançamento manual salvo com sucesso!")
+                try:
+                    supabase.table('transacoes').insert({
+                        "tipo": tipo_m, "valor": valor_m, "categoria": categoria_m, 
+                        "descricao": descricao_m, "metodo_pagamento": pagamento_m, "mes_referencia": mes_atual
+                    }).execute()
+                    st.success("✅ Lançamento manual salvo com sucesso!")
+                except Exception as e:
+                    st.error(f"Erro ao salvar: {e}")
 
 # ==========================================
 # ABA 2: FIXOS E TETOS
@@ -143,7 +146,7 @@ with tab_fixos:
     
     with col_ganhos:
         st.markdown("### 💰 Ganhos Fixos Atuais")
-        if not df_mes.empty:
+        if not df_mes.empty and 'tipo' in df_mes.columns:
             df_ganhos_fixos = df_mes[(df_mes['tipo'] == 'Ganho') & (df_mes['categoria'] == 'Fixo')]
             if not df_ganhos_fixos.empty:
                 st.dataframe(df_ganhos_fixos[['descricao', 'valor']], hide_index=True, use_container_width=True)
@@ -151,21 +154,26 @@ with tab_fixos:
                 if id_deletar and st.button("🗑️ Excluir Ganho", key="btn_del_g1"):
                     deletar_transacao(id_deletar)
             else:
-                st.info("Nenhum ganho fixo lançado neste mês.")
+                st.info("Nenhum ganho fixo lançado.")
+        else:
+            st.info("Nenhum ganho fixo lançado.")
                 
         with st.form("form_ganhos_fixos"):
             desc_ganho = st.text_input("Nova Fonte (ex: Artefact)")
             valor_ganho = st.number_input("Valor Recebido (R$)", min_value=0.0, step=100.0)
             if st.form_submit_button("Adicionar Ganho Fixo"):
-                supabase.table('transacoes').insert({
-                    "tipo": "Ganho", "valor": valor_ganho, "categoria": "Fixo", 
-                    "descricao": desc_ganho, "mes_referencia": mes_atual
-                }).execute()
-                st.rerun()
+                try:
+                    supabase.table('transacoes').insert({
+                        "tipo": "Ganho", "valor": valor_ganho, "categoria": "Fixo", 
+                        "descricao": desc_ganho, "mes_referencia": mes_atual
+                    }).execute()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao adicionar: {e}")
 
     with col_gastos:
         st.markdown("### 💸 Gastos Fixos Atuais")
-        if not df_mes.empty:
+        if not df_mes.empty and 'tipo' in df_mes.columns:
             df_gastos_fixos = df_mes[(df_mes['tipo'] == 'Gasto') & (df_mes['categoria'] == 'Fixo')]
             if not df_gastos_fixos.empty:
                 st.dataframe(df_gastos_fixos[['descricao', 'valor']], hide_index=True, use_container_width=True)
@@ -173,17 +181,22 @@ with tab_fixos:
                 if id_deletar2 and st.button("🗑️ Excluir Gasto", key="btn_del_g2"):
                     deletar_transacao(id_deletar2)
             else:
-                st.info("Nenhum gasto fixo lançado neste mês.")
+                st.info("Nenhum gasto fixo lançado.")
+        else:
+            st.info("Nenhum gasto fixo lançado.")
                 
         with st.form("form_gastos_fixos"):
             desc_gasto = st.text_input("Nova Despesa (ex: Seguro, Carla)")
             valor_gasto = st.number_input("Valor da Despesa (R$)", min_value=0.0, step=50.0)
             if st.form_submit_button("Adicionar Gasto Fixo"):
-                supabase.table('transacoes').insert({
-                    "tipo": "Gasto", "valor": valor_gasto, "categoria": "Fixo", 
-                    "descricao": desc_gasto, "mes_referencia": mes_atual
-                }).execute()
-                st.rerun()
+                try:
+                    supabase.table('transacoes').insert({
+                        "tipo": "Gasto", "valor": valor_gasto, "categoria": "Fixo", 
+                        "descricao": desc_gasto, "mes_referencia": mes_atual
+                    }).execute()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao adicionar: {e}")
 
 # ==========================================
 # ABA 3: DASHBOARD
@@ -192,7 +205,7 @@ with tab_dashboard:
     st.subheader(f"Visão Geral - {mes_atual}")
     df_mes = get_transacoes(mes_atual)
     
-    if not df_mes.empty and not df_mes[df_mes['valor'] > 0].empty:
+    if not df_mes.empty and 'valor' in df_mes.columns and not df_mes[df_mes['valor'] > 0].empty:
         ganhos_totais = df_mes[df_mes['tipo'] == 'Ganho']['valor'].sum()
         gastos_totais = df_mes[df_mes['tipo'] == 'Gasto']['valor'].sum()
         saldo = ganhos_totais - gastos_totais
@@ -218,9 +231,9 @@ with tab_historico:
     st.subheader("Todos os Lançamentos")
     df_mes = get_transacoes(mes_atual)
     
-    if not df_mes.empty and not df_mes[df_mes['valor'] > 0].empty:
+    if not df_mes.empty and 'valor' in df_mes.columns and not df_mes[df_mes['valor'] > 0].empty:
         st.dataframe(
-            df_mes[['data_transacao', 'tipo', 'categoria', 'descricao', 'valor', 'metodo_pagamento']], 
+            df_mes[['id', 'data_transacao', 'tipo', 'categoria', 'descricao', 'valor', 'metodo_pagamento']], 
             use_container_width=True, hide_index=True
         )
         
