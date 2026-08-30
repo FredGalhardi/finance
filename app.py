@@ -39,9 +39,18 @@ if auth_status != "logado":
     st.stop()
 
 # --- FUNÇÕES DE BANCO DE DADOS ---
+# Tratamento de erro robusto e garantia de que as colunas existam mesmo se o mês estiver vazio
 def get_transacoes(mes_ref):
-    res = supabase.table('transacoes').select("*").eq('mes_referencia', mes_ref).execute()
-    return pd.DataFrame(res.data) if res.data else pd.DataFrame()
+    colunas_padrao = ['id', 'tipo', 'valor', 'categoria', 'descricao', 'metodo_pagamento', 'data_transacao']
+    try:
+        res = supabase.table('transacoes').select("*").eq('mes_referencia', mes_ref).execute()
+        if res.data:
+            return pd.DataFrame(res.data)
+        else:
+            return pd.DataFrame(columns=colunas_padrao)
+    except Exception as e:
+        st.error(f"Erro de conexão com o banco. Você rodou o comando SQL para desativar o RLS?")
+        return pd.DataFrame(columns=colunas_padrao)
 
 def deletar_transacao(id_transacao):
     supabase.table('transacoes').delete().eq('id', id_transacao).execute()
@@ -54,7 +63,6 @@ mes_atual = st.selectbox("Selecione o Mês de Referência:", meses_disponiveis, 
 
 CATEGORIAS = ["Alimentação", "Role", "Compras x", "Carro", "Seguro", "Viagem", "Fixo", "Outros"]
 
-# Criação das 4 Abas
 tab_lancamento, tab_fixos, tab_dashboard, tab_historico = st.tabs([
     "🎙️ Lançamento Rápido", 
     "⚙️ Fixos e Tetos", 
@@ -63,61 +71,66 @@ tab_lancamento, tab_fixos, tab_dashboard, tab_historico = st.tabs([
 ])
 
 # ==========================================
-# ABA 1: LANÇAMENTO (ÁUDIO + MANUAL)
+# ABA 1: LANÇAMENTO AUTOMÁTICO VIA ÁUDIO
 # ==========================================
 with tab_lancamento:
     st.subheader("Registrar Novo Gasto/Ganho")
-    st.info("🎙️ **Grave um áudio:** (Ex: 'Gastei 20 reais em alimentação no seu Zé no Nubank'). O Gemini vai preencher o formulário abaixo para você confirmar.")
+    st.info("🎙️ **Grave e salve direto:** Diga 'Gastei 20 reais no Zé' ou 'Recebi 500 do vô'. O app salva sozinho.")
     
     col1, col2 = st.columns([1, 2])
     with col1:
-        audio_bytes = audio_recorder(text="Gravar Áudio", icon_size="2x")
+        audio_bytes = audio_recorder(text="Gravar Áudio (Clique para iniciar/parar)", icon_size="2x")
     
     if audio_bytes:
         with col2:
             st.audio(audio_bytes, format="audio/wav")
-            if st.button("Transcrever e Preencher com IA 🧠", use_container_width=True):
-                with st.spinner("O Gemini está analisando seu áudio..."):
+            if st.button("Transcrever e Salvar Direto 🚀", use_container_width=True, type="primary"):
+                with st.spinner("Ouvindo e lançando na planilha..."):
                     try:
+                        # Prompt forçando o formato final para ir direto pro banco
                         prompt = """
-                        Extraia os dados financeiros do áudio. Retorne APENAS um JSON válido.
-                        Formato: {"valor": float, "categoria": "string", "descricao": "string", "metodo_pagamento": "string"}
-                        Categorias permitidas: Alimentação, Role, Compras x, Carro, Seguro, Viagem, Outros.
+                        Você é um assistente financeiro. Extraia os dados do áudio e retorne APENAS um JSON válido.
+                        Formato obrigatório:
+                        {
+                            "tipo": "Gasto" ou "Ganho", 
+                            "valor": número float (ex: 20.0), 
+                            "categoria": "Alimentação", "Role", "Compras x", "Carro", "Seguro", "Viagem", "Fixo" ou "Outros", 
+                            "descricao": "resumo curto", 
+                            "metodo_pagamento": "Nubank", "Bradesco", "Itaú" ou "Dinheiro"
+                        }
+                        Se for algo que o usuário pagou/gastou, defina tipo como "Gasto". Se recebeu/ganhou, defina como "Ganho".
+                        Não escreva nenhuma palavra fora das chaves do JSON.
                         """
                         resposta = model.generate_content([prompt, {"mime_type": "audio/wav", "data": audio_bytes}])
                         texto_limpo = resposta.text.replace("```json", "").replace("```", "").strip()
-                        st.session_state['dados_extraidos'] = json.loads(texto_limpo)
-                        st.success("Dados extraídos! Revise no formulário abaixo.")
+                        dados = json.loads(texto_limpo)
+                        
+                        # Injeta o mês e salva
+                        dados["mes_referencia"] = mes_atual
+                        supabase.table('transacoes').insert(dados).execute()
+                        
+                        st.success(f"✅ Salvo direto: {dados['tipo']} de R$ {dados['valor']:.2f} em {dados['categoria']}!")
                     except Exception as e:
-                        st.error(f"Erro ao processar áudio: {e}")
+                        st.error(f"Erro ao processar ou salvar o áudio: {e}")
 
-    # Formulário de Edição e Salvamento
     st.divider()
-    st.markdown("### 📝 Revisar e Salvar")
-    gasto = st.session_state.get('dados_extraidos', {})
     
-    with st.form("form_transacao"):
-        c1, c2 = st.columns(2)
-        tipo = c1.radio("Tipo da Transação", ["Gasto", "Ganho"], index=0)
-        valor = c2.number_input("Valor (R$)", value=float(gasto.get('valor', 0.0)), step=10.0)
-        
-        cat_sugerida = gasto.get('categoria', 'Outros')
-        index_cat = CATEGORIAS.index(cat_sugerida) if cat_sugerida in CATEGORIAS else 7
-        categoria = c1.selectbox("Categoria", CATEGORIAS, index=index_cat)
-        
-        pagamento = c2.selectbox("Forma de Pagamento", ["Nubank", "Bradesco", "Itaú", "Dinheiro", "Outro"], 
-                                 index=0 if "nubank" in str(gasto.get('metodo_pagamento', '')).lower() else 4)
-        descricao = st.text_input("Descrição (Ex: Mercadinho do Zé)", value=gasto.get('descricao', ''))
-        
-        if st.form_submit_button("💾 Salvar Transação", use_container_width=True):
-            supabase.table('transacoes').insert({
-                "tipo": tipo, "valor": valor, "categoria": categoria, 
-                "descricao": descricao, "metodo_pagamento": pagamento, "mes_referencia": mes_atual
-            }).execute()
-            st.success("✅ Salvo com sucesso no banco de dados!")
-            if 'dados_extraidos' in st.session_state:
-                del st.session_state['dados_extraidos']
-            st.rerun()
+    # Formulário Manual como Backup (Escondido para não poluir a tela)
+    with st.expander("📝 Inserir Manualmente (Backup)", expanded=False):
+        with st.form("form_transacao_manual"):
+            c1, c2 = st.columns(2)
+            tipo_m = c1.radio("Tipo da Transação", ["Gasto", "Ganho"], index=0)
+            valor_m = c2.number_input("Valor (R$)", min_value=0.0, step=10.0)
+            categoria_m = c1.selectbox("Categoria", CATEGORIAS)
+            pagamento_m = c2.selectbox("Forma de Pagamento", ["Nubank", "Bradesco", "Itaú", "Dinheiro", "Outro"])
+            descricao_m = st.text_input("Descrição (Ex: Mercadinho do Zé)")
+            
+            if st.form_submit_button("💾 Salvar Manualmente", use_container_width=True):
+                supabase.table('transacoes').insert({
+                    "tipo": tipo_m, "valor": valor_m, "categoria": categoria_m, 
+                    "descricao": descricao_m, "metodo_pagamento": pagamento_m, "mes_referencia": mes_atual
+                }).execute()
+                st.success("✅ Lançamento manual salvo com sucesso!")
 
 # ==========================================
 # ABA 2: FIXOS E TETOS
@@ -126,8 +139,6 @@ with tab_fixos:
     df_mes = get_transacoes(mes_atual)
     
     st.subheader(f"Gerenciamento de Fixos - {mes_atual}")
-    st.write("Aqui você visualiza e adiciona os ganhos e gastos recorrentes.")
-    
     col_ganhos, col_gastos = st.columns(2)
     
     with col_ganhos:
@@ -181,7 +192,7 @@ with tab_dashboard:
     st.subheader(f"Visão Geral - {mes_atual}")
     df_mes = get_transacoes(mes_atual)
     
-    if not df_mes.empty:
+    if not df_mes.empty and not df_mes[df_mes['valor'] > 0].empty:
         ganhos_totais = df_mes[df_mes['tipo'] == 'Ganho']['valor'].sum()
         gastos_totais = df_mes[df_mes['tipo'] == 'Gasto']['valor'].sum()
         saldo = ganhos_totais - gastos_totais
@@ -198,7 +209,7 @@ with tab_dashboard:
             gastos_agrupados = gastos_df.groupby('categoria')['valor'].sum().reset_index()
             st.bar_chart(gastos_agrupados, x="categoria", y="valor", use_container_width=True)
     else:
-        st.info("Ainda não há dados suficientes para gerar o dashboard deste mês.")
+        st.info("Ainda não há dados financeiros registrados para gerar o dashboard deste mês.")
 
 # ==========================================
 # ABA 4: HISTÓRICO COMPLETO
@@ -207,8 +218,7 @@ with tab_historico:
     st.subheader("Todos os Lançamentos")
     df_mes = get_transacoes(mes_atual)
     
-    if not df_mes.empty:
-        # Mostrando tabela interativa
+    if not df_mes.empty and not df_mes[df_mes['valor'] > 0].empty:
         st.dataframe(
             df_mes[['data_transacao', 'tipo', 'categoria', 'descricao', 'valor', 'metodo_pagamento']], 
             use_container_width=True, hide_index=True
