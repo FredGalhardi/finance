@@ -26,11 +26,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 # --- CENTRAL DE COOKIES E LOGIN ---
-@st.cache_resource
-def get_manager():
-    return stx.CookieManager()
-
-cookie_manager = get_manager()
+cookie_manager = stx.CookieManager(key="cookie_manager")
 auth_status = cookie_manager.get(cookie="auth_status")
 
 # Se o cookie não disser "logado", mostra a tela de senha e trava o resto
@@ -83,50 +79,4 @@ if audio_bytes:
                 ])
                 
                 # Limpa a resposta pra garantir que é um JSON lido pelo Python
-                texto_limpo = resposta.text.replace("```json", "").replace("```", "").strip()
-                dados_gasto = json.loads(texto_limpo)
-                
-                # Salva o resultado na memória temporária da tela
-                st.session_state['novo_gasto'] = dados_gasto
-                st.success("Áudio processado com sucesso!")
-                
-            except Exception as e:
-                st.error(f"Erro ao processar com Gemini: {e}")
-
-# Exibe o formulário com os dados preenchidos pela IA para você apenas confirmar
-if 'novo_gasto' in st.session_state:
-    gasto = st.session_state['novo_gasto']
-    st.divider()
-    st.subheader("Confirme os dados extraídos:")
-    
-    with st.form("form_confirmacao"):
-        valor = st.number_input("Valor (R$)", value=float(gasto.get('valor', 0.0)))
-        
-        cat_sugerida = gasto.get('categoria', 'Outros')
-        index_cat = CATEGORIAS.index(cat_sugerida) if cat_sugerida in CATEGORIAS else 6
-        categoria = st.selectbox("Categoria", CATEGORIAS, index=index_cat)
-        
-        descricao = st.text_input("Descrição", value=gasto.get('descricao', ''))
-        pagamento = st.text_input("Pagamento (ex: Nubank, Bradesco)", value=gasto.get('metodo_pagamento', ''))
-        
-        # Mês de referência pegando automático
-        mes_atual = datetime.now().strftime("%m/%Y")
-        mes_ref = st.text_input("Mês de Referência", value=mes_atual)
-        
-        salvar = st.form_submit_button("💾 Salvar Gasto")
-        
-        if salvar:
-            # Monta o pacote pra mandar pro Supabase
-            payload = {
-                "tipo": "Gasto",
-                "valor": valor,
-                "categoria": categoria,
-                "descricao": descricao,
-                "metodo_pagamento": pagamento,
-                "mes_referencia": mes_ref
-            }
-            
-            # Dá o comando de Insert
-            supabase.table('transacoes').insert(payload).execute()
-            st.success("✅ Gasto registrado no Supabase com sucesso!")
-            del st.session_state['novo_gasto'] # Limpa a tela pra um novo gasto
+                texto_limpo = resposta.text.replace("```json", "").replace("
