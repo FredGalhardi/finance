@@ -26,7 +26,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 # --- CENTRAL DE COOKIES E LOGIN ---
-@st.cache_resource(experimental_allow_widgets=True)
+@st.cache_resource
 def get_manager():
     return stx.CookieManager()
 
@@ -43,7 +43,7 @@ if auth_status != "logado":
         if senha_digitada == APP_PASSWORD:
             # Salva o cookie para durar até o ano 2030 (só loga uma vez)
             cookie_manager.set("auth_status", "logado", expires_at=datetime(2030, 1, 1))
-            st.success("Login aprovado! Se a tela não recarregar, aperte F5.")
+            st.success("Login aprovado! Se a tela não recarregar sozinha, atualize a página.")
         else:
             st.error("Senha incorreta!")
     st.stop() # Para o app aqui se não tiver senha
